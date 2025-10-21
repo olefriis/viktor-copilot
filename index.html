@@ -562,14 +562,14 @@
             velocity.z = 0;
             
             direction.z = Number(keys.forward) - Number(keys.backward);
-            direction.x = Number(keys.right) - Number(keys.left);
+            direction.x = Number(keys.left) - Number(keys.right);
             direction.normalize();
             
             if (keys.forward || keys.backward) velocity.z -= direction.z * moveSpeed;
             if (keys.left || keys.right) velocity.x -= direction.x * moveSpeed;
             
             controls.moveRight(velocity.x);
-            controls.moveForward(velocity.z);
+            controls.moveForward(-velocity.z);
             
             // Keep player on ground
             camera.position.y = 1.6;
