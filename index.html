@@ -29,6 +29,15 @@
             color: #ff4444;
         }
         
+        #quest {
+            color: #ffdd44;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 10px 15px;
+            border-radius: 5px;
+            margin-top: 10px;
+            border: 2px solid #ffdd44;
+        }
+        
         #instructions {
             position: absolute;
             bottom: 20px;
@@ -99,8 +108,9 @@
     <div id="startScreen">
         <h1>🌲 99 Nætter 🌲</h1>
         <p>Overlev 99 nætter ude i skoven!</p>
+        <p>Få en ny opgave hver dag - fuldfør den for at få helbred!</p>
         <p>Om natten kommer et monster... Gå tilbage til din base for at være i sikkerhed!</p>
-        <p><strong>Kontroller:</strong> W/A/S/D - Bevæg dig | Mus - Se dig omkring</p>
+        <p><strong>Kontroller:</strong> W/A/S/D - Bevæg dig | Mus - Se dig omkring | E - Interager</p>
         <button id="startButton">Start Spillet</button>
     </div>
     
@@ -109,10 +119,11 @@
         <div>Tid: <span id="time">Dag</span></div>
         <div id="health">❤️ Helbred: <span id="healthValue">100</span></div>
         <div id="status" style="color: #88ff88;"></div>
+        <div id="quest">📋 Opgave: <span id="questText">Venter...</span></div>
     </div>
     
     <div id="instructions">
-        W/A/S/D - Bevæg dig | Mus - Se dig omkring
+        W/A/S/D - Bevæg dig | Mus - Se dig omkring | E - Interager
     </div>
     
     <div id="message"></div>
@@ -139,7 +150,22 @@
         let health = 100;
         let gameOver = false;
         let timeOfDay = 0; // 0-1: 0=midnight, 0.25=dawn, 0.5=noon, 0.75=dusk
-        let dayDuration = 30000; // 30 sekunder per dag/nat cyklus (kan justeres)
+        let dayDuration = 60000; // 60 sekunder per fuld dag/nat cyklus (30 sek dag + 30 sek nat)
+        
+        // Quest system
+        let currentQuest = null;
+        let questProgress = 0;
+        let questTarget = 0;
+        const questTypes = [
+            { type: 'chop', name: 'Hug træer', emoji: '🪓', target: 3 },
+            { type: 'explore', name: 'Udforsk skoven', emoji: '🗺️', target: 50 },
+            { type: 'collect', name: 'Saml ting', emoji: '📦', target: 5 },
+            { type: 'survive', name: 'Overlev natten', emoji: '🌙', target: 1 },
+            { type: 'return', name: 'Vend tilbage til basen', emoji: '🏠', target: 1 }
+        ];
+        let interactableObjects = [];
+        let exploredDistance = 0;
+        let lastPosition = new THREE.Vector3();
         
         // Movement
         const moveSpeed = 0.15;
@@ -291,6 +317,16 @@
                 
                 createTree(x, z);
             }
+            
+            // Create collectible items
+            for (let i = 0; i < 20; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const distance = minDistance + Math.random() * (maxDistance - minDistance);
+                const x = Math.cos(angle) * distance;
+                const z = Math.sin(angle) * distance;
+                
+                createCollectible(x, z);
+            }
         }
         
         function createTree(x, z) {
@@ -304,6 +340,8 @@
             trunk.position.y = trunkHeight / 2;
             trunk.castShadow = true;
             trunk.receiveShadow = true;
+            trunk.userData.isTree = true;
+            trunk.userData.chopped = false;
             tree.add(trunk);
             
             // Foliage
@@ -316,8 +354,42 @@
             tree.add(foliage);
             
             tree.position.set(x, 0, z);
+            tree.userData.trunk = trunk;
             scene.add(tree);
             trees.push(tree);
+            interactableObjects.push(trunk);
+        }
+        
+        function createCollectible(x, z) {
+            const collectible = new THREE.Group();
+            
+            // Box
+            const boxGeometry = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+            const boxMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            const box = new THREE.Mesh(boxGeometry, boxMaterial);
+            box.position.y = 0.4;
+            box.castShadow = true;
+            box.receiveShadow = true;
+            box.userData.isCollectible = true;
+            box.userData.collected = false;
+            collectible.add(box);
+            
+            // Glow effect
+            const glowGeometry = new THREE.SphereGeometry(0.5, 8, 8);
+            const glowMaterial = new THREE.MeshBasicMaterial({ 
+                color: 0xffdd44,
+                transparent: true,
+                opacity: 0.3
+            });
+            const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+            glow.position.y = 0.4;
+            collectible.add(glow);
+            
+            collectible.position.set(x, 0, z);
+            collectible.userData.box = box;
+            collectible.userData.glow = glow;
+            scene.add(collectible);
+            interactableObjects.push(box);
         }
         
         function createMonster() {
@@ -380,7 +452,45 @@
             document.getElementById('startScreen').style.display = 'none';
             controls.lock();
             gameStarted = true;
+            lastPosition.copy(camera.position);
+            assignQuest();
             animate();
+        }
+        
+        function assignQuest() {
+            const questType = questTypes[Math.floor(Math.random() * questTypes.length)];
+            currentQuest = questType;
+            questProgress = 0;
+            questTarget = questType.target;
+            exploredDistance = 0;
+            
+            updateQuestUI();
+            showMessage(`${questType.emoji} Ny opgave: ${questType.name}!`, 3000);
+        }
+        
+        function updateQuestUI() {
+            if (!currentQuest) return;
+            
+            let progressText = '';
+            if (currentQuest.type === 'explore') {
+                progressText = `${Math.floor(questProgress)}/${questTarget}m`;
+            } else {
+                progressText = `${questProgress}/${questTarget}`;
+            }
+            
+            document.getElementById('questText').textContent = 
+                `${currentQuest.emoji} ${currentQuest.name} (${progressText})`;
+        }
+        
+        function completeQuest() {
+            if (!currentQuest) return;
+            
+            showMessage(`✅ Opgave fuldført!\n+20 Helbred`, 3000);
+            health = Math.min(100, health + 20);
+            document.getElementById('healthValue').textContent = Math.floor(health);
+            
+            currentQuest = null;
+            document.getElementById('questText').textContent = 'Fuldført! ✓';
         }
         
         function onKeyDown(event) {
@@ -389,6 +499,7 @@
                 case 'KeyS': keys.backward = true; break;
                 case 'KeyA': keys.left = true; break;
                 case 'KeyD': keys.right = true; break;
+                case 'KeyE': handleInteraction(); break;
             }
         }
         
@@ -405,6 +516,47 @@
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+        
+        function handleInteraction() {
+            if (!controls.isLocked) return;
+            
+            // Raycast to find objects in front of player
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+            
+            const intersects = raycaster.intersectObjects(interactableObjects, false);
+            
+            if (intersects.length > 0) {
+                const object = intersects[0].object;
+                
+                // Check if it's a tree
+                if (object.userData.isTree && !object.userData.chopped && currentQuest?.type === 'chop') {
+                    object.userData.chopped = true;
+                    object.material.color.setHex(0x3d2313); // Darker color
+                    questProgress++;
+                    updateQuestUI();
+                    showMessage('🪓 Træ hugget!', 1000);
+                    
+                    if (questProgress >= questTarget) {
+                        completeQuest();
+                    }
+                }
+                
+                // Check if it's a collectible
+                if (object.userData.isCollectible && !object.userData.collected && currentQuest?.type === 'collect') {
+                    object.userData.collected = true;
+                    object.visible = false;
+                    object.parent.visible = false;
+                    questProgress++;
+                    updateQuestUI();
+                    showMessage('📦 Ting samlet!', 1000);
+                    
+                    if (questProgress >= questTarget) {
+                        completeQuest();
+                    }
+                }
+            }
         }
         
         function updateDayNightCycle() {
@@ -424,6 +576,17 @@
                 nightCount++;
                 showMessage('☀️ Dag ' + nightCount, 3000);
                 hideMonster();
+                
+                // Check if survived the night quest
+                if (currentQuest?.type === 'survive') {
+                    questProgress = 1;
+                    completeQuest();
+                }
+                
+                // Assign new quest for the day
+                if (!currentQuest) {
+                    assignQuest();
+                }
                 
                 if (nightCount > 99) {
                     winGame();
@@ -573,6 +736,32 @@
             
             // Keep player on ground
             camera.position.y = 1.6;
+            
+            // Update quest progress for exploration
+            if (currentQuest?.type === 'explore') {
+                const moved = camera.position.distanceTo(lastPosition);
+                exploredDistance += moved;
+                questProgress = exploredDistance;
+                updateQuestUI();
+                
+                if (questProgress >= questTarget) {
+                    completeQuest();
+                }
+            }
+            
+            // Update quest progress for returning to base
+            if (currentQuest?.type === 'return') {
+                const distanceToBase = new THREE.Vector2(camera.position.x, camera.position.z).distanceTo(
+                    new THREE.Vector2(basePosition.x, basePosition.z)
+                );
+                
+                if (distanceToBase < baseRadius) {
+                    questProgress = 1;
+                    completeQuest();
+                }
+            }
+            
+            lastPosition.copy(camera.position);
         }
         
         function showMessage(text, duration) {
