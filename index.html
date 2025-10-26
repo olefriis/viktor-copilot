@@ -180,8 +180,11 @@
         </div>
     </div>
     
+    <div id="inventory" style="position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.7); padding: 15px; border-radius: 8px; color: white; font-size: 14px; display: flex; gap: 20px; z-index: 1000;">
+    </div>
+    
     <div id="instructions">
-        W/A/S/D - Bevæg dig | Mus - Se dig omkring | E - Interager
+        W/A/S/D - Bevæg dig | Mus - Se dig omkring | E - Interager | 1/2/3 - Vælg genstand | F - Brug lommelygte
     </div>
     
     <div id="message"></div>
@@ -210,12 +213,32 @@
         let timeOfDay = 0; // 0-1: 0=midnight, 0.25=dawn, 0.5=noon, 0.75=dusk
         let dayDuration = 60000; // 60 sekunder per fuld dag/nat cyklus (30 sek dag + 30 sek nat)
         let lastUpdateTime = Date.now();
+        let lastMonsterHitTime = 0; // Track last time monster hit player
+        const monsterHitCooldown = 2000; // 2 seconds between hits
+        
+        // Dimension system
+        let inAlternateDimension = false;
+        let dimensionQuest = null;
+        let originalWorldState = null; // Store world state before dimension
         
         // Resources
         let fireLevel = 100; // Bål niveau
         let foodLevel = 100; // Mad niveau
-        const fireDecayRate = 0.5; // Procent per sekund
-        const foodDecayRate = 0.3; // Procent per sekund
+        const fireDecayRate = 0.2; // Procent per sekund (lavere = langsommere)
+        const foodDecayRate = 0.15; // Procent per sekund (lavere = langsommere)
+        
+        // Inventory system
+        let inventory = {
+            axe: false,      // 🪓 Økse - skal have for at hugge træer
+            flashlight: false, // 🔦 Lommelygte - fryser monster i 2 sekunder
+            bag: false       // 🎒 Sæk - skal have for at samle bandager
+        };
+        let currentItem = null; // Hvilken genstand er aktiv (1=økse, 2=lommelygte, 3=sæk)
+        let monsterFrozen = false;
+        let monsterFreezeEndTime = 0;
+        let flashlightCooldown = false;
+        let flashlightReadyTime = 0;
+        const flashlightCooldownDuration = 5000; // 5 sekunder
         
         // Quest system - 3 quests per day
         let quests = [
@@ -252,7 +275,11 @@
             forward: false,
             backward: false,
             left: false,
-            right: false
+            right: false,
+            one: false,
+            two: false,
+            three: false,
+            flashlight: false
         };
         
         // Base position (safe zone)
@@ -312,8 +339,14 @@
             // Create forest
             createForest();
             
+            // Create inventory items in the world
+            createInventoryItems();
+            
             // Create monster (hidden initially)
             createMonster();
+            
+            // Update inventory UI
+            updateInventoryUI();
             
             // Controls
             controls = new PointerLockControls(camera, document.body);
@@ -419,6 +452,7 @@
             trunk.receiveShadow = true;
             trunk.userData.isTree = true;
             trunk.userData.chopped = false;
+            trunk.userData.treeGroup = tree; // Reference to parent tree group
             tree.add(trunk);
             
             // Foliage
@@ -432,6 +466,7 @@
             
             tree.position.set(x, 0, z);
             tree.userData.trunk = trunk;
+            tree.userData.foliage = foliage;
             scene.add(tree);
             trees.push(tree);
             interactableObjects.push(trunk);
@@ -440,33 +475,151 @@
         function createCollectible(x, z) {
             const collectible = new THREE.Group();
             
-            // Box
-            const boxGeometry = new THREE.BoxGeometry(0.8, 0.8, 0.8);
-            const boxMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
-            const box = new THREE.Mesh(boxGeometry, boxMaterial);
-            box.position.y = 0.4;
-            box.castShadow = true;
-            box.receiveShadow = true;
-            box.userData.isCollectible = true;
-            box.userData.collected = false;
-            collectible.add(box);
+            // Bandage - white cross on red background
+            const bandageGroup = new THREE.Group();
             
-            // Glow effect
-            const glowGeometry = new THREE.SphereGeometry(0.5, 8, 8);
+            // Red base box
+            const baseGeometry = new THREE.BoxGeometry(0.6, 0.15, 0.4);
+            const baseMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+            const base = new THREE.Mesh(baseGeometry, baseMaterial);
+            base.position.y = 0.3;
+            base.castShadow = true;
+            base.receiveShadow = true;
+            base.userData.isCollectible = true;
+            base.userData.collected = false;
+            base.userData.collectibleGroup = collectible;
+            bandageGroup.add(base);
+            
+            // White cross - horizontal
+            const crossH = new THREE.BoxGeometry(0.5, 0.16, 0.1);
+            const crossMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
+            const crossHorizontal = new THREE.Mesh(crossH, crossMaterial);
+            crossHorizontal.position.y = 0.3;
+            bandageGroup.add(crossHorizontal);
+            
+            // White cross - vertical
+            const crossV = new THREE.BoxGeometry(0.1, 0.16, 0.35);
+            const crossVertical = new THREE.Mesh(crossV, crossMaterial);
+            crossVertical.position.y = 0.3;
+            bandageGroup.add(crossVertical);
+            
+            collectible.add(bandageGroup);
+            
+            // Glow effect - white/red for medical
+            const glowGeometry = new THREE.SphereGeometry(0.4, 8, 8);
             const glowMaterial = new THREE.MeshBasicMaterial({ 
-                color: 0xffdd44,
+                color: 0xff8888,
                 transparent: true,
                 opacity: 0.3
             });
             const glow = new THREE.Mesh(glowGeometry, glowMaterial);
-            glow.position.y = 0.4;
+            glow.position.y = 0.3;
             collectible.add(glow);
             
             collectible.position.set(x, 0, z);
-            collectible.userData.box = box;
+            collectible.userData.bandageGroup = bandageGroup;
             collectible.userData.glow = glow;
+            collectible.userData.base = base;
             scene.add(collectible);
-            interactableObjects.push(box);
+            interactableObjects.push(base);
+        }
+        
+        function createInventoryItems() {
+            // Place axe near base (easy to find)
+            createInventoryItem('axe', 10, 10);
+            
+            // Place flashlight further away
+            createInventoryItem('flashlight', -25, 30);
+            
+            // Place bag to the side
+            createInventoryItem('bag', 35, -20);
+        }
+        
+        function createInventoryItem(type, x, z) {
+            const item = new THREE.Group();
+            let mesh, emoji;
+            
+            if (type === 'axe') {
+                // Axe - brown handle with silver blade
+                const handleGeo = new THREE.CylinderGeometry(0.1, 0.1, 1.5, 8);
+                const handleMat = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+                const handle = new THREE.Mesh(handleGeo, handleMat);
+                handle.rotation.z = Math.PI / 4;
+                handle.position.y = 0.5;
+                item.add(handle);
+                
+                const bladeGeo = new THREE.BoxGeometry(0.6, 0.4, 0.1);
+                const bladeMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa });
+                const blade = new THREE.Mesh(bladeGeo, bladeMat);
+                blade.position.set(0.3, 1.2, 0);
+                blade.rotation.z = Math.PI / 4;
+                item.add(blade);
+                
+                emoji = '🪓';
+                mesh = handle;
+            } else if (type === 'flashlight') {
+                // Flashlight - yellow/black cylinder
+                const bodyGeo = new THREE.CylinderGeometry(0.15, 0.15, 0.8, 8);
+                const bodyMat = new THREE.MeshStandardMaterial({ color: 0xffff00 });
+                mesh = new THREE.Mesh(bodyGeo, bodyMat);
+                mesh.rotation.x = Math.PI / 2;
+                mesh.position.y = 0.4;
+                item.add(mesh);
+                
+                const lightGeo = new THREE.CylinderGeometry(0.18, 0.15, 0.1, 8);
+                const lightMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+                const light = new THREE.Mesh(lightGeo, lightMat);
+                light.rotation.x = Math.PI / 2;
+                light.position.set(0, 0.4, 0.45);
+                item.add(light);
+                
+                emoji = '🔦';
+            } else if (type === 'bag') {
+                // Bag - brown/tan backpack
+                const bagGeo = new THREE.BoxGeometry(0.6, 0.8, 0.4);
+                const bagMat = new THREE.MeshStandardMaterial({ color: 0xD2691E });
+                mesh = new THREE.Mesh(bagGeo, bagMat);
+                mesh.position.y = 0.5;
+                item.add(mesh);
+                
+                const strapGeo = new THREE.BoxGeometry(0.1, 0.6, 0.5);
+                const strapMat = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+                const strap1 = new THREE.Mesh(strapGeo, strapMat);
+                strap1.position.set(-0.2, 0.5, 0);
+                item.add(strap1);
+                
+                const strap2 = new THREE.Mesh(strapGeo, strapMat);
+                strap2.position.set(0.2, 0.5, 0);
+                item.add(strap2);
+                
+                emoji = '🎒';
+            }
+            
+            // Add glow
+            const glowGeo = new THREE.SphereGeometry(0.6, 8, 8);
+            const glowMat = new THREE.MeshBasicMaterial({ 
+                color: 0xffff00,
+                transparent: true,
+                opacity: 0.3
+            });
+            const glow = new THREE.Mesh(glowGeo, glowMat);
+            glow.position.y = 0.5;
+            item.add(glow);
+            
+            item.position.set(x, 0, z);
+            mesh.userData.isInventoryItem = true;
+            mesh.userData.itemType = type;
+            mesh.userData.itemGroup = item;
+            scene.add(item);
+            interactableObjects.push(mesh);
+            
+            // Show message when nearby
+            setTimeout(() => {
+                const dist = camera.position.distanceTo(item.position);
+                if (dist < 30) {
+                    showMessage(emoji + ' ' + (type === 'axe' ? 'Økse' : type === 'flashlight' ? 'Lommelygte' : 'Sæk') + ' fundet i nærheden!', 3000);
+                }
+            }, 1000);
         }
         
         function createMonster() {
@@ -570,29 +723,47 @@
             document.getElementById('healthBar').style.width = health + '%';
             
             // Update quest displays
-            quests.forEach(quest => {
-                const questEl = document.getElementById(`quest${quest.id}`);
-                const questTextEl = document.getElementById(`quest${quest.id}Text`);
-                
-                if (quest.questDef) {
-                    let progressText = '';
-                    if (quest.questDef.type === 'explore') {
-                        progressText = `${Math.floor(quest.progress)}/${quest.target}m`;
-                    } else {
-                        progressText = `${quest.progress}/${quest.target}`;
-                    }
+            if (inAlternateDimension && dimensionQuest) {
+                // Show dimension quest in all three slots
+                for (let i = 1; i <= 3; i++) {
+                    const questEl = document.getElementById(`quest${i}`);
+                    const questTextEl = document.getElementById(`quest${i}Text`);
                     
-                    questTextEl.textContent = `${quest.questDef.name} (${progressText})`;
+                    const progressText = `${dimensionQuest.progress}/${dimensionQuest.target}`;
+                    questTextEl.textContent = `${dimensionQuest.questDef.name} (${progressText})`;
                     
-                    if (quest.completed) {
+                    if (dimensionQuest.completed) {
                         questEl.classList.add('quest-complete');
                     } else {
                         questEl.classList.remove('quest-complete');
                     }
-                } else {
-                    questTextEl.textContent = 'Venter...';
                 }
-            });
+            } else {
+                // Normal quests
+                quests.forEach(quest => {
+                    const questEl = document.getElementById(`quest${quest.id}`);
+                    const questTextEl = document.getElementById(`quest${quest.id}Text`);
+                    
+                    if (quest.questDef) {
+                        let progressText = '';
+                        if (quest.questDef.type === 'explore') {
+                            progressText = `${Math.floor(quest.progress)}/${quest.target}m`;
+                        } else {
+                            progressText = `${quest.progress}/${quest.target}`;
+                        }
+                        
+                        questTextEl.textContent = `${quest.questDef.name} (${progressText})`;
+                        
+                        if (quest.completed) {
+                            questEl.classList.add('quest-complete');
+                        } else {
+                            questEl.classList.remove('quest-complete');
+                        }
+                    } else {
+                        questTextEl.textContent = 'Venter...';
+                    }
+                });
+            }
         }
         
         function completeQuest(questId) {
@@ -623,6 +794,29 @@
                 case 'KeyA': keys.left = true; break;
                 case 'KeyD': keys.right = true; break;
                 case 'KeyE': handleInteraction(); break;
+                case 'Digit1': 
+                    if (inventory.axe) {
+                        currentItem = 'axe';
+                        updateInventoryUI();
+                    }
+                    break;
+                case 'Digit2': 
+                    if (inventory.flashlight) {
+                        currentItem = 'flashlight';
+                        updateInventoryUI();
+                    }
+                    break;
+                case 'Digit3': 
+                    if (inventory.bag) {
+                        currentItem = 'bag';
+                        updateInventoryUI();
+                    }
+                    break;
+                case 'KeyF':
+                    if (currentItem === 'flashlight' && inventory.flashlight) {
+                        useFlashlight();
+                    }
+                    break;
             }
         }
         
@@ -653,14 +847,46 @@
             if (intersects.length > 0) {
                 const object = intersects[0].object;
                 
+                // Check if it's an inventory item to pick up
+                if (object.userData.isInventoryItem) {
+                    const itemType = object.userData.itemType;
+                    if (!inventory[itemType]) {
+                        inventory[itemType] = true;
+                        currentItem = itemType; // Auto-equip
+                        
+                        // Hide the item
+                        const itemGroup = object.userData.itemGroup;
+                        if (itemGroup) {
+                            itemGroup.visible = false;
+                        }
+                        
+                        const names = { axe: 'Økse', flashlight: 'Lommelygte', bag: 'Sæk' };
+                        const emojis = { axe: '🪓', flashlight: '🔦', bag: '🎒' };
+                        showMessage(emojis[itemType] + ' ' + names[itemType] + ' fundet og udstyret!', 2000);
+                        updateInventoryUI();
+                        return; // Don't process other interactions
+                    }
+                }
+                
                 // Check active quests
                 quests.forEach(quest => {
                     if (quest.completed || !quest.questDef) return;
                     
                     // Check if it's a tree for chopping
                     if (object.userData.isTree && !object.userData.chopped && quest.questDef.type === 'chop') {
+                        if (currentItem !== 'axe' || !inventory.axe) {
+                            showMessage('❌ Du skal have en økse i hånden for at hugge træer! (Tryk 1)', 2000);
+                            return;
+                        }
+                        
                         object.userData.chopped = true;
-                        object.material.color.setHex(0x3d2313); // Darker color
+                        
+                        // Make the entire tree disappear using the stored reference
+                        const treeGroup = object.userData.treeGroup;
+                        if (treeGroup) {
+                            treeGroup.visible = false;
+                        }
+                        
                         quest.progress++;
                         updateQuestUI();
                         showMessage('🪓 Træ hugget!', 1000);
@@ -672,18 +898,51 @@
                     
                     // Check if it's a collectible
                     if (object.userData.isCollectible && !object.userData.collected && quest.questDef.type === 'collect') {
+                        if (currentItem !== 'bag' || !inventory.bag) {
+                            showMessage('❌ Du skal have en sæk i hånden for at samle bandager! (Tryk 3)', 2000);
+                            return;
+                        }
+                        
                         object.userData.collected = true;
-                        object.visible = false;
-                        object.parent.visible = false;
+                        
+                        // Hide the entire collectible group
+                        const collectibleGroup = object.userData.collectibleGroup;
+                        if (collectibleGroup) {
+                            collectibleGroup.visible = false;
+                        }
+                        
                         quest.progress++;
                         updateQuestUI();
-                        showMessage('📦 Ting samlet!', 1000);
+                        showMessage('💊 Bandage samlet!', 1000);
+                        showMessage('� Bandage samlet!', 1000);
                         
                         if (quest.progress >= quest.target) {
                             completeQuest(quest.id);
                         }
                     }
                 });
+                
+                // Check for dimension crystals
+                if (inAlternateDimension && dimensionQuest && object.userData.isDimensionCrystal && !object.userData.collected) {
+                    object.userData.collected = true;
+                    
+                    // Hide crystal
+                    const crystalGroup = object.userData.crystalGroup;
+                    if (crystalGroup) {
+                        crystalGroup.visible = false;
+                    }
+                    
+                    dimensionQuest.progress++;
+                    updateQuestUI();
+                    showMessage('💎 Krystal samlet! (' + dimensionQuest.progress + '/10)', 1000);
+                    
+                    if (dimensionQuest.progress >= dimensionQuest.target) {
+                        dimensionQuest.completed = true;
+                        setTimeout(() => {
+                            exitAlternateDimension();
+                        }, 2000);
+                    }
+                }
             }
         }
         
@@ -697,16 +956,23 @@
             
             if (!wasNight && isNight) {
                 // Just became night
-                showMessage('🌙 Nat ' + nightCount + ' begynder...', 3000);
-                spawnMonster();
+                if (!inAlternateDimension) {
+                    showMessage('🌙 Nat ' + nightCount + ' begynder...', 3000);
+                    spawnMonster();
+                }
             } else if (wasNight && !isNight) {
                 // Just became day
                 nightCount++;
                 showMessage('☀️ Dag ' + nightCount, 3000);
                 hideMonster();
                 
-                // Assign new quests for the day
-                assignDailyQuests();
+                // Check if it's day 5, 10, 15, etc. - enter alternate dimension
+                if (!inAlternateDimension && nightCount % 5 === 0) {
+                    enterAlternateDimension();
+                } else if (!inAlternateDimension) {
+                    // Assign new quests for the day (only if not in dimension)
+                    assignDailyQuests();
+                }
                 
                 if (nightCount > 99) {
                     winGame();
@@ -782,16 +1048,180 @@
             monster.position.x = Math.cos(angle) * distance;
             monster.position.z = Math.sin(angle) * distance;
             monster.visible = true;
+            lastMonsterHitTime = 0; // Reset hit timer
         }
         
         function hideMonster() {
             if (monster) {
                 monster.visible = false;
+                lastMonsterHitTime = 0; // Reset hit timer
             }
+        }
+        
+        function enterAlternateDimension() {
+            inAlternateDimension = true;
+            
+            // Save current world state
+            originalWorldState = {
+                treeStates: trees.map(tree => ({ visible: tree.visible, chopped: tree.userData.trunk?.userData.chopped })),
+                collectibleStates: []
+            };
+            
+            // Store collectible states
+            scene.traverse((obj) => {
+                if (obj.userData.isCollectible) {
+                    originalWorldState.collectibleStates.push({
+                        object: obj,
+                        collected: obj.userData.collected,
+                        visible: obj.parent?.visible
+                    });
+                }
+            });
+            
+            // Change environment to alternate dimension
+            scene.background = new THREE.Color(0x4a0e4e); // Purple sky
+            scene.fog.color.setHex(0x4a0e4e);
+            ambientLight.color.setHex(0xff00ff); // Purple light
+            directionalLight.color.setHex(0xff00ff);
+            ground.material.color.setHex(0x1a0a1a); // Dark purple ground
+            ground.material.needsUpdate = true;
+            
+            // Create special dimension quest
+            dimensionQuest = {
+                id: 'dimension',
+                type: 'dimension',
+                completed: false,
+                progress: 0,
+                target: 10, // Collect 10 special items
+                questDef: { type: 'collect', name: 'Saml 10 mystiske krystaller', emoji: '💎', target: 10 }
+            };
+            
+            // Spawn special dimension collectibles (crystals)
+            for (let i = 0; i < 15; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const distance = 20 + Math.random() * 60;
+                const x = Math.cos(angle) * distance;
+                const z = Math.sin(angle) * distance;
+                createDimensionCrystal(x, z);
+            }
+            
+            updateQuestUI();
+            showMessage('🌀 Du er teleporteret til en alternativ dimension!\n\nSaml 10 krystaller for at vende tilbage!', 5000);
+        }
+        
+        function createDimensionCrystal(x, z) {
+            const crystal = new THREE.Group();
+            
+            // Crystal shape
+            const crystalGeometry = new THREE.ConeGeometry(0.4, 1.5, 6);
+            const crystalMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0xff00ff,
+                emissive: 0xff00ff,
+                emissiveIntensity: 0.5,
+                metalness: 0.8,
+                roughness: 0.2
+            });
+            const crystalMesh = new THREE.Mesh(crystalGeometry, crystalMaterial);
+            crystalMesh.position.y = 0.75;
+            crystalMesh.rotation.y = Math.random() * Math.PI;
+            crystalMesh.castShadow = true;
+            crystalMesh.userData.isDimensionCrystal = true;
+            crystalMesh.userData.collected = false;
+            crystalMesh.userData.crystalGroup = crystal;
+            crystal.add(crystalMesh);
+            
+            // Glow
+            const glowGeometry = new THREE.SphereGeometry(0.6, 16, 16);
+            const glowMaterial = new THREE.MeshBasicMaterial({ 
+                color: 0xff00ff,
+                transparent: true,
+                opacity: 0.4
+            });
+            const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+            glow.position.y = 0.75;
+            crystal.add(glow);
+            
+            crystal.position.set(x, 0, z);
+            scene.add(crystal);
+            interactableObjects.push(crystalMesh);
+        }
+        
+        function exitAlternateDimension() {
+            inAlternateDimension = false;
+            
+            // Remove all dimension crystals
+            const crystalsToRemove = [];
+            scene.traverse((obj) => {
+                if (obj.userData.isDimensionCrystal) {
+                    crystalsToRemove.push(obj.parent);
+                }
+            });
+            crystalsToRemove.forEach(crystal => {
+                if (crystal) scene.remove(crystal);
+            });
+            
+            // Restore world state - reset all trees and collectibles
+            if (originalWorldState) {
+                // Restore trees
+                trees.forEach((tree, index) => {
+                    if (originalWorldState.treeStates[index]) {
+                        tree.visible = true; // All trees visible again
+                        if (tree.userData.trunk) {
+                            tree.userData.trunk.userData.chopped = false; // Not chopped anymore
+                        }
+                    }
+                });
+                
+                // Restore collectibles
+                originalWorldState.collectibleStates.forEach(state => {
+                    if (state.object) {
+                        state.object.userData.collected = false;
+                        if (state.object.userData.collectibleGroup) {
+                            state.object.userData.collectibleGroup.visible = true;
+                        }
+                    }
+                });
+            }
+            
+            // Restore normal environment
+            scene.background = new THREE.Color(0x87CEEB); // Sky blue
+            scene.fog.color.setHex(0x87CEEB);
+            ambientLight.color.setHex(0xffffff);
+            directionalLight.color.setHex(0xffffff);
+            ground.material.color.setHex(0x2d5016); // Green ground
+            ground.material.needsUpdate = true;
+            
+            // Check if it's every 10th day - restore all resources to 100%
+            if (nightCount % 10 === 0) {
+                fireLevel = 100;
+                foodLevel = 100;
+                health = 100;
+                updateResourceBars();
+                showMessage('🌍 Velkommen tilbage!\n✨ Alt er genoprettet - alle ressourcer er på 100%!', 5000);
+            } else {
+                showMessage('🌍 Velkommen tilbage til den normale verden!\nAlt er genoprettet!', 4000);
+            }
+            
+            dimensionQuest = null;
+            
+            // Assign new daily quests
+            assignDailyQuests();
         }
         
         function updateMonster() {
             if (!monster || !monster.visible || gameOver) return;
+            
+            // Check if monster is frozen
+            if (monsterFrozen) {
+                if (Date.now() > monsterFreezeEndTime) {
+                    monsterFrozen = false;
+                    document.getElementById('status').textContent = '❄️ Monsteret er ikke længere fastfrosset!';
+                } else {
+                    document.getElementById('status').textContent = '❄️ MONSTERET ER FASTFROSSET!';
+                    document.getElementById('status').style.color = '#4444ff';
+                    return; // Monster can't move while frozen
+                }
+            }
             
             const playerPos = camera.position;
             const monsterPos = monster.position;
@@ -803,10 +1233,17 @@
             
             const isInBase = distanceToBase < baseRadius;
             
-            if (isInBase) {
+            // Check if fire is out
+            const fireIsOut = fireLevel <= 0;
+            
+            if (isInBase && !fireIsOut) {
                 document.getElementById('status').textContent = '🛡️ Du er i sikkerhed!';
                 document.getElementById('status').style.color = '#88ff88';
                 return;
+            } else if (isInBase && fireIsOut) {
+                document.getElementById('status').textContent = '🔥 BÅLET ER SLUKKET! Monsteret kan komme ind!';
+                document.getElementById('status').style.color = '#ff4444';
+                // Monster can enter base - don't return, continue to movement
             } else {
                 document.getElementById('status').textContent = '⚠️ Du er uden for basen!';
                 document.getElementById('status').style.color = '#ff8888';
@@ -828,24 +1265,32 @@
                 new THREE.Vector2(basePosition.x, basePosition.z)
             );
             
-            // Only move if not entering the base
-            if (newDistanceToBase >= baseRadius) {
+            // Only move if not entering the base OR if fire is out (then monster can enter)
+            if (newDistanceToBase >= baseRadius || fireIsOut) {
                 monster.position.x = newX;
                 monster.position.z = newZ;
             }
-            // If at base edge, monster just stops and waits
+            // If at base edge and fire is still burning, monster just stops and waits
             
             // Make monster look at player
             monster.lookAt(playerPos.x, monster.position.y, playerPos.z);
             
             // Check if monster caught player
             const distanceToPlayer = monsterPos.distanceTo(playerPos);
+            const currentTime = Date.now();
+            
             if (distanceToPlayer < 3) {
-                health -= 2;
-                updateQuestUI();
-                
-                if (health <= 0 && !gameOver) {
-                    endGame();
+                // Monster is touching player - check if cooldown has passed
+                if (currentTime - lastMonsterHitTime >= monsterHitCooldown) {
+                    // Deal 25 damage
+                    health -= 25;
+                    lastMonsterHitTime = currentTime;
+                    updateQuestUI();
+                    showMessage('💀 Monsteret ramte dig! -25 liv', 1500);
+                    
+                    if (health <= 0 && !gameOver) {
+                        endGame();
+                    }
                 }
             }
         }
@@ -861,11 +1306,8 @@
             // Decay food level
             foodLevel = Math.max(0, foodLevel - foodDecayRate * deltaTime);
             
-            // Check if fire went out
-            if (fireLevel <= 0 && !gameOver) {
-                endGame('Bålet slukkes! Du fryser ihjel... 🔥❄️');
-                return;
-            }
+            // Fire does not kill you, but it allows monster into base
+            // (handled in updateMonster function)
             
             // Check if starving
             if (foodLevel <= 0 && !gameOver) {
@@ -892,8 +1334,32 @@
             if (keys.forward || keys.backward) velocity.z -= direction.z * moveSpeed;
             if (keys.left || keys.right) velocity.x -= direction.x * moveSpeed;
             
+            // Store old position before moving
+            const oldPosition = camera.position.clone();
+            
             controls.moveRight(velocity.x);
             controls.moveForward(-velocity.z);
+            
+            // Check collision with trees
+            const playerPos = new THREE.Vector2(camera.position.x, camera.position.z);
+            const collisionRadius = 0.5; // Player collision radius
+            
+            for (let i = 0; i < trees.length; i++) {
+                const tree = trees[i];
+                
+                // Skip collision check if tree is not visible (chopped)
+                if (!tree.visible) continue;
+                
+                const treePos = new THREE.Vector2(tree.position.x, tree.position.z);
+                const distance = playerPos.distanceTo(treePos);
+                const treeRadius = 0.5; // Tree trunk collision radius
+                
+                // If collision detected, revert to old position
+                if (distance < collisionRadius + treeRadius) {
+                    camera.position.copy(oldPosition);
+                    break;
+                }
+            }
             
             // Keep player on ground
             camera.position.y = 1.6;
@@ -937,6 +1403,96 @@
             setTimeout(() => {
                 messageEl.style.display = 'none';
             }, duration);
+        }
+        
+        function useFlashlight() {
+            if (!monster || !monster.visible || monsterFrozen) return;
+            
+            // Check cooldown
+            const currentTime = Date.now();
+            if (flashlightCooldown) {
+                const remainingTime = Math.ceil((flashlightReadyTime - currentTime) / 1000);
+                if (remainingTime > 0) {
+                    showMessage('⏳ Lommelygten genoplader! Vent ' + remainingTime + ' sekunder...', 1000);
+                    return;
+                } else {
+                    flashlightCooldown = false;
+                }
+            }
+            
+            // Check if monster is in front of player
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+            
+            // Check if raycast hits monster (check distance and direction)
+            const playerPos = camera.position;
+            const monsterPos = monster.position;
+            const distanceToMonster = playerPos.distanceTo(monsterPos);
+            
+            // Calculate direction to monster
+            const directionToMonster = new THREE.Vector3()
+                .subVectors(monsterPos, playerPos)
+                .normalize();
+            
+            // Get camera forward direction
+            const cameraDirection = new THREE.Vector3();
+            camera.getWorldDirection(cameraDirection);
+            
+            // Check if monster is in front (dot product > 0.7 means roughly in front)
+            const dotProduct = cameraDirection.dot(directionToMonster);
+            
+            if (distanceToMonster < 30 && dotProduct > 0.7) {
+                // Hit! Freeze monster
+                monsterFrozen = true;
+                monsterFreezeEndTime = Date.now() + 2000; // 2 seconds
+                
+                // Start cooldown
+                flashlightCooldown = true;
+                flashlightReadyTime = Date.now() + flashlightCooldownDuration;
+                
+                showMessage('🔦 Lommelygten ramte monsteret! Det er fastfrosset i 2 sekunder!', 2000);
+            } else {
+                // Still use cooldown even on miss
+                flashlightCooldown = true;
+                flashlightReadyTime = Date.now() + flashlightCooldownDuration;
+                
+                showMessage('🔦 Lommelygten ramte ikke monsteret!', 1000);
+            }
+        }
+        
+        function updateInventoryUI() {
+            const inventoryEl = document.getElementById('inventory');
+            let html = '';
+            
+            // Axe
+            if (inventory.axe) {
+                html += '<div style="' + (currentItem === 'axe' ? 'background: rgba(255,255,100,0.3); ' : 'background: rgba(255,255,255,0.1); ') + 'padding: 10px; border-radius: 5px; text-align: center; min-width: 120px;">1️⃣<br>🪓<br>Økse' + (currentItem === 'axe' ? '<br>✓' : '') + '</div>';
+            } else {
+                html += '<div style="opacity: 0.3; background: rgba(255,255,255,0.1); padding: 10px; border-radius: 5px; text-align: center; min-width: 120px;">1️⃣<br>🪓<br>Økse<br>(locked)</div>';
+            }
+            
+            // Flashlight
+            if (inventory.flashlight) {
+                let cooldownText = '';
+                if (flashlightCooldown) {
+                    const remainingTime = Math.ceil((flashlightReadyTime - Date.now()) / 1000);
+                    if (remainingTime > 0) {
+                        cooldownText = '<br>⏳' + remainingTime + 's';
+                    }
+                }
+                html += '<div style="' + (currentItem === 'flashlight' ? 'background: rgba(255,255,100,0.3); ' : 'background: rgba(255,255,255,0.1); ') + 'padding: 10px; border-radius: 5px; text-align: center; min-width: 120px;">2️⃣<br>🔦<br>Lommelygte' + (currentItem === 'flashlight' ? '<br>✓' : '') + cooldownText + '</div>';
+            } else {
+                html += '<div style="opacity: 0.3; background: rgba(255,255,255,0.1); padding: 10px; border-radius: 5px; text-align: center; min-width: 120px;">2️⃣<br>🔦<br>Lommelygte<br>(locked)</div>';
+            }
+            
+            // Bag
+            if (inventory.bag) {
+                html += '<div style="' + (currentItem === 'bag' ? 'background: rgba(255,255,100,0.3); ' : 'background: rgba(255,255,255,0.1); ') + 'padding: 10px; border-radius: 5px; text-align: center; min-width: 120px;">3️⃣<br>🎒<br>Sæk' + (currentItem === 'bag' ? '<br>✓' : '') + '</div>';
+            } else {
+                html += '<div style="opacity: 0.3; background: rgba(255,255,255,0.1); padding: 10px; border-radius: 5px; text-align: center; min-width: 120px;">3️⃣<br>🎒<br>Sæk<br>(locked)</div>';
+            }
+            
+            inventoryEl.innerHTML = html;
         }
         
         function endGame(message) {
