@@ -29,13 +29,54 @@
             color: #ff4444;
         }
         
-        #quest {
+        #resources {
+            margin-top: 10px;
+        }
+        
+        .resource-bar {
+            margin: 5px 0;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 5px 10px;
+            border-radius: 3px;
+        }
+        
+        .bar-container {
+            width: 200px;
+            height: 20px;
+            background: rgba(50, 50, 50, 0.8);
+            border: 2px solid white;
+            border-radius: 3px;
+            overflow: hidden;
+            display: inline-block;
+            vertical-align: middle;
+            margin-left: 10px;
+        }
+        
+        .bar-fill {
+            height: 100%;
+            transition: width 0.3s;
+        }
+        
+        .fire-bar { background: linear-gradient(90deg, #ff6600, #ff9933); }
+        .food-bar { background: linear-gradient(90deg, #66cc66, #99ff99); }
+        .health-bar { background: linear-gradient(90deg, #ff4444, #ff8888); }
+        
+        #quests {
+            margin-top: 10px;
+        }
+        
+        .quest-item {
             color: #ffdd44;
             background: rgba(0, 0, 0, 0.6);
-            padding: 10px 15px;
+            padding: 8px 12px;
             border-radius: 5px;
-            margin-top: 10px;
+            margin: 5px 0;
             border: 2px solid #ffdd44;
+        }
+        
+        .quest-complete {
+            border-color: #44ff44;
+            color: #44ff44;
         }
         
         #instructions {
@@ -108,7 +149,8 @@
     <div id="startScreen">
         <h1>🌲 99 Nætter 🌲</h1>
         <p>Overlev 99 nætter ude i skoven!</p>
-        <p>Få en ny opgave hver dag - fuldfør den for at få helbred!</p>
+        <p>Hver dag får du 3 opgaver:</p>
+        <p>🔥 Hold bålet tændt | 🍖 Find mad | ❤️ Få helbredelse</p>
         <p>Om natten kommer et monster... Gå tilbage til din base for at være i sikkerhed!</p>
         <p><strong>Kontroller:</strong> W/A/S/D - Bevæg dig | Mus - Se dig omkring | E - Interager</p>
         <button id="startButton">Start Spillet</button>
@@ -117,9 +159,25 @@
     <div id="ui">
         <div>Nat: <span id="night">1</span> / 99</div>
         <div>Tid: <span id="time">Dag</span></div>
-        <div id="health">❤️ Helbred: <span id="healthValue">100</span></div>
         <div id="status" style="color: #88ff88;"></div>
-        <div id="quest">📋 Opgave: <span id="questText">Venter...</span></div>
+        
+        <div id="resources">
+            <div class="resource-bar">
+                🔥 Bål: <div class="bar-container"><div class="bar-fill fire-bar" id="fireBar" style="width: 100%;"></div></div> <span id="fireValue">100</span>%
+            </div>
+            <div class="resource-bar">
+                🍖 Mad: <div class="bar-container"><div class="bar-fill food-bar" id="foodBar" style="width: 100%;"></div></div> <span id="foodValue">100</span>%
+            </div>
+            <div class="resource-bar">
+                ❤️ Liv: <div class="bar-container"><div class="bar-fill health-bar" id="healthBar" style="width: 100%;"></div></div> <span id="healthValue">100</span>%
+            </div>
+        </div>
+        
+        <div id="quests">
+            <div class="quest-item" id="quest1">🔥 Opgave 1: <span id="quest1Text">Venter...</span></div>
+            <div class="quest-item" id="quest2">🍖 Opgave 2: <span id="quest2Text">Venter...</span></div>
+            <div class="quest-item" id="quest3">❤️ Opgave 3: <span id="quest3Text">Venter...</span></div>
+        </div>
     </div>
     
     <div id="instructions">
@@ -141,7 +199,7 @@
         import * as THREE from 'three';
         import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 
-        // Game state
+                // Game state
         let scene, camera, renderer, controls;
         let player, monster;
         let gameStarted = false;
@@ -151,24 +209,43 @@
         let gameOver = false;
         let timeOfDay = 0; // 0-1: 0=midnight, 0.25=dawn, 0.5=noon, 0.75=dusk
         let dayDuration = 60000; // 60 sekunder per fuld dag/nat cyklus (30 sek dag + 30 sek nat)
+        let lastUpdateTime = Date.now();
         
-        // Quest system
-        let currentQuest = null;
-        let questProgress = 0;
-        let questTarget = 0;
-        const questTypes = [
-            { type: 'chop', name: 'Hug træer', emoji: '🪓', target: 3 },
-            { type: 'explore', name: 'Udforsk skoven', emoji: '🗺️', target: 50 },
-            { type: 'collect', name: 'Saml ting', emoji: '📦', target: 5 },
-            { type: 'survive', name: 'Overlev natten', emoji: '🌙', target: 1 },
-            { type: 'return', name: 'Vend tilbage til basen', emoji: '🏠', target: 1 }
+        // Resources
+        let fireLevel = 100; // Bål niveau
+        let foodLevel = 100; // Mad niveau
+        const fireDecayRate = 0.5; // Procent per sekund
+        const foodDecayRate = 0.3; // Procent per sekund
+        
+        // Quest system - 3 quests per day
+        let quests = [
+            { id: 1, type: 'fire', completed: false, progress: 0, target: 3 },
+            { id: 2, type: 'food', completed: false, progress: 0, target: 5 },
+            { id: 3, type: 'health', completed: false, progress: 0, target: 1 }
         ];
+        
+        const questTypeDefinitions = {
+            fire: [
+                { type: 'chop', name: 'Hug træer til bålet', emoji: '🪓', target: 3 },
+                { type: 'collect', name: 'Saml brænde', emoji: '🪵', target: 3 }
+            ],
+            food: [
+                { type: 'collect', name: 'Saml mad', emoji: '🍖', target: 5 },
+                { type: 'explore', name: 'Jagt efter mad', emoji: '🦌', target: 50 }
+            ],
+            health: [
+                { type: 'collect', name: 'Find medicin', emoji: '💊', target: 1 },
+                { type: 'return', name: 'Hvil ved basen', emoji: '😴', target: 1 }
+            ]
+        };
+        
         let interactableObjects = [];
         let exploredDistance = 0;
         let lastPosition = new THREE.Vector3();
         
         // Movement
         const moveSpeed = 0.15;
+        const monsterSpeed = 0.16; // Slightly faster than player
         const velocity = new THREE.Vector3();
         const direction = new THREE.Vector3();
         const keys = {
@@ -453,44 +530,90 @@
             controls.lock();
             gameStarted = true;
             lastPosition.copy(camera.position);
-            assignQuest();
+            lastUpdateTime = Date.now();
+            assignDailyQuests();
             animate();
         }
         
-        function assignQuest() {
-            const questType = questTypes[Math.floor(Math.random() * questTypes.length)];
-            currentQuest = questType;
-            questProgress = 0;
-            questTarget = questType.target;
-            exploredDistance = 0;
+        function assignDailyQuests() {
+            // Reset all quests
+            quests = [
+                { id: 1, type: 'fire', completed: false, progress: 0, target: 0, questDef: null },
+                { id: 2, type: 'food', completed: false, progress: 0, target: 0, questDef: null },
+                { id: 3, type: 'health', completed: false, progress: 0, target: 0, questDef: null }
+            ];
             
+            // Assign random quest for each type
+            quests[0].questDef = questTypeDefinitions.fire[Math.floor(Math.random() * questTypeDefinitions.fire.length)];
+            quests[0].target = quests[0].questDef.target;
+            
+            quests[1].questDef = questTypeDefinitions.food[Math.floor(Math.random() * questTypeDefinitions.food.length)];
+            quests[1].target = quests[1].questDef.target;
+            
+            quests[2].questDef = questTypeDefinitions.health[Math.floor(Math.random() * questTypeDefinitions.health.length)];
+            quests[2].target = quests[2].questDef.target;
+            
+            exploredDistance = 0;
             updateQuestUI();
-            showMessage(`${questType.emoji} Ny opgave: ${questType.name}!`, 3000);
+            showMessage('📋 Nye daglige opgaver!', 3000);
         }
         
         function updateQuestUI() {
-            if (!currentQuest) return;
+            // Update resource bars
+            document.getElementById('fireValue').textContent = Math.floor(fireLevel);
+            document.getElementById('fireBar').style.width = fireLevel + '%';
             
-            let progressText = '';
-            if (currentQuest.type === 'explore') {
-                progressText = `${Math.floor(questProgress)}/${questTarget}m`;
-            } else {
-                progressText = `${questProgress}/${questTarget}`;
-            }
+            document.getElementById('foodValue').textContent = Math.floor(foodLevel);
+            document.getElementById('foodBar').style.width = foodLevel + '%';
             
-            document.getElementById('questText').textContent = 
-                `${currentQuest.emoji} ${currentQuest.name} (${progressText})`;
+            document.getElementById('healthValue').textContent = Math.floor(health);
+            document.getElementById('healthBar').style.width = health + '%';
+            
+            // Update quest displays
+            quests.forEach(quest => {
+                const questEl = document.getElementById(`quest${quest.id}`);
+                const questTextEl = document.getElementById(`quest${quest.id}Text`);
+                
+                if (quest.questDef) {
+                    let progressText = '';
+                    if (quest.questDef.type === 'explore') {
+                        progressText = `${Math.floor(quest.progress)}/${quest.target}m`;
+                    } else {
+                        progressText = `${quest.progress}/${quest.target}`;
+                    }
+                    
+                    questTextEl.textContent = `${quest.questDef.name} (${progressText})`;
+                    
+                    if (quest.completed) {
+                        questEl.classList.add('quest-complete');
+                    } else {
+                        questEl.classList.remove('quest-complete');
+                    }
+                } else {
+                    questTextEl.textContent = 'Venter...';
+                }
+            });
         }
         
-        function completeQuest() {
-            if (!currentQuest) return;
+        function completeQuest(questId) {
+            const quest = quests.find(q => q.id === questId);
+            if (!quest || quest.completed) return;
             
-            showMessage(`✅ Opgave fuldført!\n+20 Helbred`, 3000);
-            health = Math.min(100, health + 20);
-            document.getElementById('healthValue').textContent = Math.floor(health);
+            quest.completed = true;
             
-            currentQuest = null;
-            document.getElementById('questText').textContent = 'Fuldført! ✓';
+            // Give rewards based on quest type
+            if (quest.type === 'fire') {
+                fireLevel = Math.min(100, fireLevel + 30);
+                showMessage(`🔥 Opgave fuldført!\nBål +30%`, 2000);
+            } else if (quest.type === 'food') {
+                foodLevel = Math.min(100, foodLevel + 40);
+                showMessage(`🍖 Opgave fuldført!\nMad +40%`, 2000);
+            } else if (quest.type === 'health') {
+                health = Math.min(100, health + 30);
+                showMessage(`❤️ Opgave fuldført!\nLiv +30%`, 2000);
+            }
+            
+            updateQuestUI();
         }
         
         function onKeyDown(event) {
@@ -530,32 +653,37 @@
             if (intersects.length > 0) {
                 const object = intersects[0].object;
                 
-                // Check if it's a tree
-                if (object.userData.isTree && !object.userData.chopped && currentQuest?.type === 'chop') {
-                    object.userData.chopped = true;
-                    object.material.color.setHex(0x3d2313); // Darker color
-                    questProgress++;
-                    updateQuestUI();
-                    showMessage('🪓 Træ hugget!', 1000);
+                // Check active quests
+                quests.forEach(quest => {
+                    if (quest.completed || !quest.questDef) return;
                     
-                    if (questProgress >= questTarget) {
-                        completeQuest();
+                    // Check if it's a tree for chopping
+                    if (object.userData.isTree && !object.userData.chopped && quest.questDef.type === 'chop') {
+                        object.userData.chopped = true;
+                        object.material.color.setHex(0x3d2313); // Darker color
+                        quest.progress++;
+                        updateQuestUI();
+                        showMessage('🪓 Træ hugget!', 1000);
+                        
+                        if (quest.progress >= quest.target) {
+                            completeQuest(quest.id);
+                        }
                     }
-                }
-                
-                // Check if it's a collectible
-                if (object.userData.isCollectible && !object.userData.collected && currentQuest?.type === 'collect') {
-                    object.userData.collected = true;
-                    object.visible = false;
-                    object.parent.visible = false;
-                    questProgress++;
-                    updateQuestUI();
-                    showMessage('📦 Ting samlet!', 1000);
                     
-                    if (questProgress >= questTarget) {
-                        completeQuest();
+                    // Check if it's a collectible
+                    if (object.userData.isCollectible && !object.userData.collected && quest.questDef.type === 'collect') {
+                        object.userData.collected = true;
+                        object.visible = false;
+                        object.parent.visible = false;
+                        quest.progress++;
+                        updateQuestUI();
+                        showMessage('📦 Ting samlet!', 1000);
+                        
+                        if (quest.progress >= quest.target) {
+                            completeQuest(quest.id);
+                        }
                     }
-                }
+                });
             }
         }
         
@@ -577,16 +705,8 @@
                 showMessage('☀️ Dag ' + nightCount, 3000);
                 hideMonster();
                 
-                // Check if survived the night quest
-                if (currentQuest?.type === 'survive') {
-                    questProgress = 1;
-                    completeQuest();
-                }
-                
-                // Assign new quest for the day
-                if (!currentQuest) {
-                    assignQuest();
-                }
+                // Assign new quests for the day
+                assignDailyQuests();
                 
                 if (nightCount > 99) {
                     winGame();
@@ -699,9 +819,21 @@
                 playerPos.z - monsterPos.z
             ).normalize();
             
-            const monsterSpeed = 0.08;
-            monster.position.x += direction.x * monsterSpeed;
-            monster.position.z += direction.z * monsterSpeed;
+            // Calculate new position
+            const newX = monsterPos.x + direction.x * monsterSpeed;
+            const newZ = monsterPos.z + direction.z * monsterSpeed;
+            
+            // Check if new position would be inside the base
+            const newDistanceToBase = new THREE.Vector2(newX, newZ).distanceTo(
+                new THREE.Vector2(basePosition.x, basePosition.z)
+            );
+            
+            // Only move if not entering the base
+            if (newDistanceToBase >= baseRadius) {
+                monster.position.x = newX;
+                monster.position.z = newZ;
+            }
+            // If at base edge, monster just stops and waits
             
             // Make monster look at player
             monster.lookAt(playerPos.x, monster.position.y, playerPos.z);
@@ -710,12 +842,41 @@
             const distanceToPlayer = monsterPos.distanceTo(playerPos);
             if (distanceToPlayer < 3) {
                 health -= 2;
-                document.getElementById('healthValue').textContent = Math.max(0, Math.floor(health));
+                updateQuestUI();
                 
                 if (health <= 0 && !gameOver) {
                     endGame();
                 }
             }
+        }
+        
+        function updateResources() {
+            const currentTime = Date.now();
+            const deltaTime = (currentTime - lastUpdateTime) / 1000; // Convert to seconds
+            lastUpdateTime = currentTime;
+            
+            // Decay fire level
+            fireLevel = Math.max(0, fireLevel - fireDecayRate * deltaTime);
+            
+            // Decay food level
+            foodLevel = Math.max(0, foodLevel - foodDecayRate * deltaTime);
+            
+            // Check if fire went out
+            if (fireLevel <= 0 && !gameOver) {
+                endGame('Bålet slukkes! Du fryser ihjel... 🔥❄️');
+                return;
+            }
+            
+            // Check if starving
+            if (foodLevel <= 0 && !gameOver) {
+                health -= 1 * deltaTime; // Lose health when starving
+                if (health <= 0 && !gameOver) {
+                    endGame('Du sultede ihjel... 🍖💀');
+                    return;
+                }
+            }
+            
+            updateQuestUI();
         }
         
         function updateMovement() {
@@ -738,28 +899,32 @@
             camera.position.y = 1.6;
             
             // Update quest progress for exploration
-            if (currentQuest?.type === 'explore') {
-                const moved = camera.position.distanceTo(lastPosition);
-                exploredDistance += moved;
-                questProgress = exploredDistance;
-                updateQuestUI();
+            quests.forEach(quest => {
+                if (quest.completed || !quest.questDef) return;
                 
-                if (questProgress >= questTarget) {
-                    completeQuest();
+                if (quest.questDef.type === 'explore') {
+                    const moved = camera.position.distanceTo(lastPosition);
+                    exploredDistance += moved;
+                    quest.progress = exploredDistance;
+                    updateQuestUI();
+                    
+                    if (quest.progress >= quest.target) {
+                        completeQuest(quest.id);
+                    }
                 }
-            }
-            
-            // Update quest progress for returning to base
-            if (currentQuest?.type === 'return') {
-                const distanceToBase = new THREE.Vector2(camera.position.x, camera.position.z).distanceTo(
-                    new THREE.Vector2(basePosition.x, basePosition.z)
-                );
                 
-                if (distanceToBase < baseRadius) {
-                    questProgress = 1;
-                    completeQuest();
+                // Update quest progress for returning to base
+                if (quest.questDef.type === 'return') {
+                    const distanceToBase = new THREE.Vector2(camera.position.x, camera.position.z).distanceTo(
+                        new THREE.Vector2(basePosition.x, basePosition.z)
+                    );
+                    
+                    if (distanceToBase < baseRadius) {
+                        quest.progress = 1;
+                        completeQuest(quest.id);
+                    }
                 }
-            }
+            });
             
             lastPosition.copy(camera.position);
         }
@@ -774,9 +939,10 @@
             }, duration);
         }
         
-        function endGame() {
+        function endGame(message) {
             gameOver = true;
-            showMessage('💀 Du blev spist af monsteret!\n\nDu overlevede ' + (nightCount - 1) + ' nætter', 999999);
+            const defaultMessage = '💀 Du blev spist af monsteret!\n\nDu overlevede ' + (nightCount - 1) + ' nætter';
+            showMessage(message || defaultMessage, 999999);
             controls.unlock();
             setTimeout(() => {
                 location.reload();
@@ -796,6 +962,7 @@
             
             if (!gameOver) {
                 updateDayNightCycle();
+                updateResources();
                 updateMovement();
                 updateMonster();
             }
